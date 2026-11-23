@@ -1,0 +1,23 @@
+diff --git a/modules/camera/camera_linux.cpp b/modules/camera/camera_linux.cpp
+--- a/modules/camera/camera_linux.cpp
++++ b/modules/camera/camera_linux.cpp
+@@ -61,7 +61,7 @@
+ 				}
+ 			}
+ 
+-			struct dirent **devices;
++			struct dirent **devices = nullptr;
+ 			int count = scandir("/dev", &devices, nullptr, alphasort);
+ 
+ 			if (count != -1) {
+@@ -75,9 +75,8 @@
+ 					}
+ 					free(device);
+ 				}
++				free(devices);
+ 			}
+-
+-			free(devices);
+ 		}
+ 
+ 		call_deferred("emit_signal", SNAME(CameraServer::feeds_updated_signal_name));

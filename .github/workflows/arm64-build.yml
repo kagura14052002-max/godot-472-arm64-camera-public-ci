@@ -1,0 +1,64 @@
+name: Godot 4.7.2 ARM64 camera build and QA
+
+on:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: "Build editor and run camera/import QA after native runner probe"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: godot-472-arm64
+  cancel-in-progress: false
+
+jobs:
+  native_arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Preflight public-only files and secret patterns
+        run: python3 run/preflight.py
+      - name: Probe native ARM64 CPU and resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ARM64_PROBE_START"
+          test "$(uname -m)" = "aarch64"
+          echo "ARCH=$(uname -m)"
+          echo "CPU=$(getconf _NPROCESSORS_ONLN)"
+          free -h
+          df -h /
+          echo "ARM64_PROBE_PASS"
+      - name: Install ARM64 toolchain
+        if: inputs.build
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential scons git curl xz-utils pkg-config binutils \
+            libx11-dev libxcursor-dev libxinerama-dev libxext-dev libxrender-dev \
+            libgl1-mesa-dev libglu1-mesa-dev libxi-dev libxrandr-dev \
+            libasound2-dev libpulse-dev libudev-dev libwayland-dev \
+            libxkbcommon-dev libfontconfig1-dev libdbus-1-dev
+      - name: Build engine and run camera/import QA
+        if: inputs.build
+        shell: bash
+        run: bash run/build_and_qa.sh
+      - name: Upload candidate or diagnostic evidence
+        if: always() && inputs.build
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot-472-arm64-camera-candidate
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 3
+          compression-level: 0

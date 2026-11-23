@@ -1,0 +1,8 @@
+config_version=5
+[application]
+config/name="Godot 4.7.2 isolated empty project import"
+config/features=PackedStringArray("4.7", "GL Compatibility")
+[rendering]
+renderer/rendering_method="gl_compatibility"
+[editor]
+import/use_multiple_threads=false
