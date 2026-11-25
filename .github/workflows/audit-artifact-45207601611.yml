@@ -1,0 +1,152 @@
+name: Audit existing Godot ARM64 artifact 45207601611
+on:
+  push:
+    branches: [audit/artifact-45207601611]
+    paths: ['.github/workflows/audit-artifact-45207601611.yml']
+permissions:
+  actions: read
+  contents: read
+concurrency:
+  group: audit-artifact-45207601611
+  cancel-in-progress: false
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Download pinned public artifact and verify original ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p audit parts extracted
+          curl --fail --silent --show-error --location --retry 2 --max-time 900 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -o candidate.zip \
+            https://api.github.com/repos/kagura14052002-max/godot-472-arm64-camera-public-ci/actions/artifacts/14839682588/zip
+          test "$(stat -c %s candidate.zip)" = 2088515145
+          printf '%s  candidate.zip\n' b3dc0e17ae3edc7da04ce95414447cf53ecfdb29e131f351bbaebcaff067f60c | sha256sum -c | tee audit/zip-check.txt
+          sha256sum candidate.zip > audit/ZIP_SHA256.txt
+          echo 'ORIGINAL_ZIP_VERIFIED'
+      - name: Split original ZIP and verify reassembly
+        shell: bash
+        run: |
+          set -euo pipefail
+          split -b 400M -d -a 2 candidate.zip parts/part-
+          test "$(find parts -type f | wc -l)" = 5
+          for p in parts/part-*; do test "$(stat -c %s "$p")" -le 419430400; done
+          sha256sum parts/part-* > audit/PART_SHA256SUMS
+          actual="$(cat parts/part-* | sha256sum | cut -d' ' -f1)"
+          test "$actual" = b3dc0e17ae3edc7da04ce95414447cf53ecfdb29e131f351bbaebcaff067f60c
+          echo "SPLIT_REASSEMBLY_PASS $actual" | tee audit/reassembly.txt
+      - name: Preserve original ZIP part 00
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot-45207601611-part-00
+          path: parts/part-00
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+      - name: Preserve original ZIP part 01
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot-45207601611-part-01
+          path: parts/part-01
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+      - name: Preserve original ZIP part 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot-45207601611-part-02
+          path: parts/part-02
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+      - name: Preserve original ZIP part 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot-45207601611-part-03
+          path: parts/part-03
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+      - name: Preserve original ZIP part 04
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot-45207601611-part-04
+          path: parts/part-04
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+      - name: Audit original binary and QA evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, pathlib, re, shutil, zipfile
+          out = pathlib.Path("extracted")
+          report = pathlib.Path("audit")
+          binary = "Godot_4.7.2_ARM64_camera_fixed_candidate"
+          logs = ["camera_1.log", "camera_2.log", "camera_3.log", "import.log"]
+          names = [binary, "SHA256SUMS", "BUILD_METADATA.txt", "version.txt", *logs]
+          def require(ok, message):
+              if not ok:
+                  raise SystemExit("AUDIT_FAIL: " + message)
+          with zipfile.ZipFile("candidate.zip") as z:
+              members = [i.filename for i in z.infolist() if not i.is_dir()]
+              require(sorted(members) == sorted(names), "unexpected/missing ZIP members")
+              for name in names:
+                  info = z.getinfo(name)
+                  require(info.file_size <= (8*1024**3 if name == binary else 16*1024**2), "member too large: "+name)
+                  with z.open(info) as src, (out/name).open("wb") as dst:
+                      shutil.copyfileobj(src, dst, length=1024*1024)
+              (report/"archive-members.txt").write_text("\n".join(members)+"\n")
+          for name in names:
+              if name != binary:
+                  shutil.copyfile(out/name, report/name)
+          manifest = (out/"SHA256SUMS").read_text().strip()
+          m = re.fullmatch(r"([0-9a-fA-F]{64})[ \t]+\*?(.+)", manifest)
+          require(m is not None and pathlib.PurePosixPath(m.group(2)).name == binary, "invalid original binary manifest")
+          with (out/binary).open("rb") as f:
+              digest = hashlib.file_digest(f, "sha256").hexdigest()
+          require(digest == m.group(1).lower(), "binary SHA256 mismatch")
+          (report/"BINARY_SHA256.txt").write_text(digest+"  "+binary+"\n")
+          print("BINARY_SHA256_PASS", digest)
+          markers = ["CAMERA_SCAN_TEST_START", "GODOT_DENY_DEV_SCANDIR_TEST_INJECTED", "CAMERA_SCAN_TEST_END"]
+          bad = re.compile(r"handle_crash|SIGSEGV|SCRIPT ERROR:|ERROR:")
+          def camera_ok(s):
+              positions = [s.find(marker) for marker in markers]
+              return all(p >= 0 for p in positions) and positions == sorted(positions) and not bad.search(s)
+          # Negative controls: no injected fault, wrong order, crash.
+          require(not camera_ok(markers[0]+"\n"+markers[2]), "negative control missing injection")
+          require(not camera_ok("\n".join(reversed(markers))), "negative control ordering")
+          require(not camera_ok("\n".join(markers)+"\nSIGSEGV"), "negative control crash")
+          require(camera_ok("\n".join(markers)), "positive control")
+          for name in logs[:3]:
+              s = (out/name).read_text(errors="replace")
+              require(camera_ok(s), "invalid camera evidence: "+name)
+              print("CAMERA_EACCES_LOG_PASS", name)
+          s = (out/"import.log").read_text(errors="replace")
+          require(bool(s.strip()) and not bad.search(s), "invalid import log")
+          require("Godot" in s and re.search(r"first_scan_filesystem|filesystem|scan_filesystem", s, re.I), "import evidence lacks filesystem scan")
+          print("IMPORT_LOG_PASS")
+          PY
+          readelf -h extracted/Godot_4.7.2_ARM64_camera_fixed_candidate | tee audit/elf-header.txt
+          grep -Eq 'Machine:[[:space:]]*AArch64' audit/elf-header.txt
+          grep -Eq 'Class:[[:space:]]*ELF64' audit/elf-header.txt
+          readelf -SW extracted/Godot_4.7.2_ARM64_camera_fixed_candidate > audit/elf-sections.txt
+          grep -Fq '.debug_info' audit/elf-sections.txt
+          echo 'ELF_AARCH64_DWARF_PASS' | tee audit/elf-check.txt
+          echo 'ARTIFACT_AUDIT_PASS' | tee audit/result.txt
+      - name: Upload audit evidence separately
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot-45207601611-audit-evidence
+          path: audit/
+          if-no-files-found: warn
+          retention-days: 3
